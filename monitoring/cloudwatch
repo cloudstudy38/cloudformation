@@ -1,0 +1,11 @@
+aws cloudwatch put-metric-alarm \
+  --alarm-name "Prod-HighCPU" \
+  --metric-name CPUUtilization \
+  --namespace AWS/EC2 \
+  --statistic Average \
+  --period 300 \
+  --threshold 80 \
+  --comparison-operator GreaterThanThreshold \
+  --dimensions Name=InstanceId,Value=i-xxxxxxx \
+  --evaluation-periods 2 \
+  --alarm-actions arn:aws:sns:us-east-1:123456789012:Alerts
