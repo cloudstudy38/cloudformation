@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Production WordPress Stack
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet::Id
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet::Id
+
+  DBName:
+    Type: String
+    Default: wordpressdb
+
+  DBUser:
+    Type: String
+    Default: admin
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+
+Resources:
+
+  ProdDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Prod DB Subnet
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  ProdRDSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow EC2 to RDS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref ProdEC2SG
+
+  ProdEC2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web traffic
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  ProdDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      Engine: mysql
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !Ref ProdRDSSG
+      DBSubnetGroupName: !Ref ProdDBSubnetGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+
+  ProdEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref ProdEC2SG
+      InstanceType: t3.micro
+      ImageId: ami-0eeeee0   # <-- USE Amazon Linux 2 for your region
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install -y httpd php php-mysqlnd wget
+          systemctl enable httpd
+          systemctl start httpd
+          wget https://wordpress.org/latest.tar.gz -P /tmp
+          tar -xf /tmp/latest.tar.gz -C /var/www/html/
+          mv /var/www/html/wordpress/* /var/www/html/
+
+          cat > /var/www/html/wp-config.php <<EOF
+          <?php
+          define('DB_NAME', '${DBName}');
+          define('DB_USER', '${DBUser}');
+          define('DB_PASSWORD', '${DBPassword}');
+          define('DB_HOST', '${ProdDB.Endpoint.Address}');
+          ?>
+          EOF
+          chown -R apache:apache /var/www/html
+          systemctl restart httpd
+
+Outputs:
+  ProdURL:
+    Value: !Sub "http://${ProdEC2.PublicIp}"
+  ProdDBEndpoint:
+    Value: !GetAtt ProdDB.Endpoint.Address
