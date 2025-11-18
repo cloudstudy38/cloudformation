@@ -1,0 +1,42 @@
+pipeline {
+    agent any
+
+    stages {
+
+        stage('Validate CFN') {
+            steps {
+                sh 'aws cloudformation validate-template --template-body file://cloudformation/prod-wordpress.yaml'
+            }
+        }
+
+        stage('Deploy Production') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                aws cloudformation deploy \
+                  --template-file cloudformation/prod-wordpress.yaml \
+                  --stack-name wordpress-prod \
+                  --capabilities CAPABILITY_NAMED_IAM \
+                  --parameter-overrides $(cat parameters/prod-params.json)
+                '''
+            }
+        }
+
+        stage('Deploy Dev') {
+            when {
+                branch 'dev'
+            }
+            steps {
+                sh '''
+                aws cloudformation deploy \
+                  --template-file cloudformation/dev-wordpress.yaml \
+                  --stack-name wordpress-dev \
+                  --capabilities CAPABILITY_NAMED_IAM \
+                  --parameter-overrides $(cat parameters/dev-params.json)
+                '''
+            }
+        }
+    }
+}
