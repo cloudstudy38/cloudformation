@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Development WordPress Stack (Auto start/stop friendly)
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID created by vpc.yaml
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Dev EC2 Public Subnet
+
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Dev RDS Private Subnet A
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Dev RDS Private Subnet B (Multi-AZ)
+
+  DBName:
+    Type: String
+    Default: devwordpressdb
+
+  DBUser:
+    Type: String
+    Default: devadmin
+
+  DBPassword:
+    Type: String
+    NoEcho: true
+
+  EC2InstanceType:
+    Type: String
+    Default: t3.micro
+
+Resources:
+
+  DevDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Dev DB Subnet
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+
+  DevEC2SG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Dev EC2 Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  DevRDSSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow Dev EC2 to talk to RDS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref DevEC2SG
+
+  DevRDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      Engine: mysql
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      DBName: !Ref DBName
+      VPCSecurityGroups:
+        - !Ref DevRDSSG
+      DBSubnetGroupName: !Ref DevDBSubnetGroup
+      MultiAZ: false
+      PubliclyAccessible: false
+
+  DevEC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      SecurityGroupIds:
+        - !Ref DevEC2SG
+      InstanceType: !Ref EC2InstanceType
+      ImageId: ami-0ed9277fb7eb570c9
+      Tags:
+        - Key: Name
+          Value: DevWordPress
+
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum install -y httpd php php-mysqlnd wget unzip
+          systemctl enable httpd
+          systemctl start httpd
+
+          # Install WordPress
+          wget https://wordpress.org/latest.tar.gz -P /tmp
+          tar -xf /tmp/latest.tar.gz -C /var/www/html/
+          mv /var/www/html/wordpress/* /var/www/html/
+
+          # Configure WordPress
+          cat > /var/www/html/wp-config.php <<EOF
+          <?php
+          define('DB_NAME', '${DBName}');
+          define('DB_USER', '${DBUser}');
+          define('DB_PASSWORD', '${DBPassword}');
+          define('DB_HOST', '${DevRDS.Endpoint.Address}');
+          define('DB_CHARSET', 'utf8');
+          define('DB_COLLATE', '');
+          \$table_prefix = 'wp_';
+          define('WP_DEBUG', true);
+          if ( !defined('ABSPATH') )
+            define('ABSPATH', dirname(__FILE__) . '/');
+          require_once(ABSPATH . 'wp-settings.php');
+          EOF
+
+          chown -R apache:apache /var/www/html
+          systemctl restart httpd
+
+Outputs:
+  DevURL:
+    Description: Dev WordPress URL
+    Value: !Sub "http://${DevEC2.PublicIp}"
+
+  DevDBEndpoint:
+    Description: Dev RDS Endpoint
+    Value: !GetAtt DevRDS.Endpoint.Address
+
+  DevEC2Id:
+    Description: Use this for Lambda start/stop scheduler
+    Value: !Ref DevEC2
