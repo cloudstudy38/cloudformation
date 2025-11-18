@@ -1,0 +1,85 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Start/Stop Dev EC2 on Schedule
+
+Parameters:
+  DevInstanceId:
+    Type: String
+
+Resources:
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EC2StartStop
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                Resource: "*"
+
+  StartFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          def lambda_handler(event, context):
+              boto3.client("ec2").start_instances(InstanceIds=["${DevInstanceId}"])
+              return "started"
+
+  StopFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaRole.Arn
+      Runtime: python3.9
+      Code:
+        ZipFile: |
+          import boto3
+          def lambda_handler(event, context):
+              boto3.client("ec2").stop_instances(InstanceIds=["${DevInstanceId}"])
+              return "stopped"
+
+  StartSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "cron(0 9 * * ? *)"
+      Targets:
+        - Arn: !GetAtt StartFunction.Arn
+          Id: "StartDev"
+
+  StopSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: "cron(0 18 * * ? *)"
+      Targets:
+        - Arn: !GetAtt StopFunction.Arn
+          Id: "StopDev"
+
+  PermissionStart:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StartFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StartSchedule.Arn
+
+  PermissionStop:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StopFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StopSchedule.Arn
